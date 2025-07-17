@@ -365,8 +365,8 @@ def create_dataloaders(config, tokenizer) -> Dict[str, DataLoader]:
     num_workers = getattr(config.data, 'num_workers', 4) if hasattr(config, 'data') else 4
     batch_size = getattr(config.training, 'batch_size', 8) if hasattr(config, 'training') else 8
     
-    # Example: Create sample data if no data directory specified
-    if not dataset_path or not os.path.exists(dataset_path):
+    # Example: Create sample data if no data directory specified or if it's empty
+    if not dataset_path or not os.path.exists(dataset_path) or len(os.listdir(dataset_path)) == 0:
         print("Creating sample dataset...")
         
         # Generate sample texts
@@ -409,13 +409,19 @@ def create_dataloaders(config, tokenizer) -> Dict[str, DataLoader]:
         # Ensure datasets have examples
         if len(train_dataset) == 0:
             print("Warning: Empty train dataset, creating fallback examples")
-            fallback_texts = ["This is a test sentence for training."] * 10
-            train_dataset = LongContextDataset(fallback_texts, tokenizer, max_length=max_length)
+            fallback_texts = []
+            for i in range(50):  # Create enough examples
+                text = f"This is a longer test sentence for training example number {i}. " * 10  # Make longer
+                fallback_texts.append(text)
+            train_dataset = LongContextDataset(fallback_texts, tokenizer, max_length=max_length, min_length=8)
         
         if len(val_dataset) == 0:
             print("Warning: Empty val dataset, creating fallback examples")
-            fallback_texts = ["This is a test sentence for validation."] * 5
-            val_dataset = LongContextDataset(fallback_texts, tokenizer, max_length=max_length)
+            fallback_texts = []
+            for i in range(10):  # Create enough examples
+                text = f"This is a longer test sentence for validation example number {i}. " * 10  # Make longer  
+                fallback_texts.append(text)
+            val_dataset = LongContextDataset(fallback_texts, tokenizer, max_length=max_length, min_length=8)
         
         # Also create a recall dataset for evaluation
         recall_dataset = RecallDataset(
