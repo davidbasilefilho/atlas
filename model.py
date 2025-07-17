@@ -183,7 +183,7 @@ class AtlasMemoryUpdate(nn.Module):
             
         try:
             gradients = torch.autograd.grad(total_loss, memory_params, 
-                                          create_graph=True, retain_graph=True, allow_unused=True)
+                                          create_graph=False, retain_graph=False, allow_unused=True)
         except RuntimeError:
             # If gradient computation fails, return empty dict
             return {}
@@ -195,17 +195,23 @@ class AtlasMemoryUpdate(nn.Module):
                 continue
                 
             if self.config.use_muon_optimizer:
-                # Simplified Muon update with numerical stability
-                # Update momentum
-                self.momentum = self.beta * self.momentum + (1 - self.beta) * grad.norm()
+                # Simplified Muon update with better numerical stability
+                # Update momentum with exponential moving average
+                grad_norm = grad.norm().item()
+                self.momentum = self.beta * self.momentum + (1 - self.beta) * grad_norm
                 
-                # Apply update with gradient clipping for stability
-                grad_clipped = torch.clamp(grad, min=-1.0, max=1.0)
-                update = self.eta * grad_clipped / (self.momentum + self.eps)
+                # Prevent division by zero and apply more conservative clipping
+                grad_clipped = torch.clamp(grad, min=-0.1, max=0.1)  # More conservative clipping
+                momentum_term = self.momentum + self.eps
+                update = self.eta * grad_clipped / momentum_term
+                
+                # Additional safety: limit the update magnitude
+                update = torch.clamp(update, min=-0.01, max=0.01)
             else:
-                # Standard gradient descent with clipping
-                grad_clipped = torch.clamp(grad, min=-1.0, max=1.0)
+                # Standard gradient descent with conservative clipping
+                grad_clipped = torch.clamp(grad, min=-0.1, max=0.1)
                 update = self.eta * grad_clipped
+                update = torch.clamp(update, min=-0.01, max=0.01)
             
             updated_params[id(param)] = param - update
         
