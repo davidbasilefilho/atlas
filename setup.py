@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Simple setup script for Atlas - use only for manual setup
-For package installation, use: pip install -e .
+For package installation, use: uv sync
 """
 
 import os
@@ -38,12 +38,11 @@ def main():
     
     print("\n✨ Directory setup completed!")
     print("\n📋 To install dependencies:")
-    print("   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu")
-    print("   pip install transformers datasets wandb tqdm accelerate tensorboard einops hydra-core omegaconf matplotlib seaborn")
+    print("   uv sync  # Install all dependencies from pyproject.toml")
     print("\n🎯 Next steps:")
-    print("   1. Login to wandb: wandb login (optional)")
-    print("   2. Run demo: python demo.py") 
-    print("   3. Start training: python main.py --mode train --debug")
+    print("   1. Login to wandb: uv run wandb login (optional)")
+    print("   2. Run demo: uv run python demo.py") 
+    print("   3. Start training: uv run python main.py --mode train --debug")
     
 
 if __name__ == "__main__":

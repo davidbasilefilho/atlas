@@ -33,12 +33,12 @@ git clone <repository-url>
 cd atlas
 ```
 
-2. Install dependencies:
+2. Install dependencies with uv:
 ```bash
-pip install -e .
+uv sync
 ```
 
-Required packages:
+Required packages are automatically installed from `pyproject.toml`:
 - PyTorch >= 2.0.0
 - Transformers >= 4.30.0
 - Datasets >= 2.14.0
@@ -53,31 +53,31 @@ Required packages:
 Train an Atlas model with default configuration:
 
 ```bash
-python main.py --mode train
+uv run python main.py --mode train
 ```
 
 Train with specific model size:
 ```bash
-python main.py --mode train --config small  # 512 hidden, 8 layers
-python main.py --mode train --config medium # 768 hidden, 12 layers  
-python main.py --mode train --config large  # 1024 hidden, 24 layers
+uv run python main.py --mode train --config small  # 512 hidden, 8 layers
+uv run python main.py --mode train --config medium # 768 hidden, 12 layers  
+uv run python main.py --mode train --config large  # 1024 hidden, 24 layers
 ```
 
 Debug mode (quick testing):
 ```bash
-python main.py --mode train --debug
+uv run python main.py --mode train --debug
 ```
 
 ### Evaluation
 
 Evaluate a trained model:
 ```bash
-python main.py --mode eval --model-path checkpoints/best_model.pt
+uv run python main.py --mode eval --model-path checkpoints/best_model.pt
 ```
 
 Train and evaluate:
 ```bash
-python main.py --mode both
+uv run python main.py --mode both
 ```
 
 ### Configuration
@@ -220,7 +220,7 @@ Atlas now includes a Monte Carlo Tree Search (MCTS) optimization system based on
 #### Running MCTS Optimization
 
 ```bash
-python optimize.py
+uv run python optimize.py
 ```
 
 This will:
@@ -256,7 +256,7 @@ performance on the needle-in-haystack task.</R>
 
 **Simulation**: Empirical evaluation through subprocess execution:
 ```bash
-python main.py --mode eval --config-json config.json --output-json --debug
+uv run python main.py --mode eval --config-json config.json --output-json --debug
 ```
 
 **Backpropagation**: Updates Q-values and visit counts along the path to root.
@@ -307,7 +307,7 @@ Test specific configurations:
 echo '{"memory_depth": 3, "polynomial_degree": 4}' > test_config.json
 
 # Test configuration
-python main.py --mode eval --config-json test_config.json --output-json --debug
+uv run python main.py --mode eval --config-json test_config.json --output-json --debug
 ```
 
 Returns structured metrics:
