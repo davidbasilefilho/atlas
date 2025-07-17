@@ -68,6 +68,18 @@ Debug mode (quick testing):
 python main.py --mode train --debug
 ```
 
+### MCTS Optimization
+
+Run automatic configuration optimization:
+```bash
+python optimize.py
+```
+
+Run demonstration of the optimization system:
+```bash
+python demo_optimization.py
+```
+
 ### Evaluation
 
 Evaluate a trained model:
@@ -332,6 +344,30 @@ def calculate_reward(metrics):
 ```
 
 This balances language modeling performance, retrieval capability, and memory efficiency.
+
+#### Generated Files
+
+The optimization system creates several important files:
+
+```
+reasoner_training_data.jsonl          # Training data for reasoner improvement
+best_atlas_config.json                # Optimal configuration found
+optimization_test_results.json        # Results from multiple test runs
+extended_reasoner_training_data.jsonl # Extended training dataset
+```
+
+Each line in `reasoner_training_data.jsonl` contains:
+```json
+{
+  "state": {"hidden_size": 256, "memory_depth": 1, ...},
+  "reasoning": "<R>The current memory_depth is small...</R>",
+  "policy": {"{'memory_depth': 2}": 0.33, ...},
+  "actions": [{"memory_depth": 2}, ...],
+  "reward": 0.42
+}
+```
+
+This data can be used to train more sophisticated reasoners that learn from successful optimization patterns.
 
 ### Custom Memory Architectures
 
