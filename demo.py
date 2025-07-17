@@ -16,18 +16,44 @@ def demo_atlas_model():
     print("🚀 Atlas Model Demo")
     print("=" * 50)
     
-    # Initialize tokenizer
+    # Initialize tokenizer with fallback
     print("📚 Loading tokenizer...")
-    tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
-    tokenizer.pad_token = tokenizer.eos_token
+    try:
+        tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+        tokenizer.pad_token = tokenizer.eos_token
+        print("   ✓ GPT2 tokenizer loaded successfully")
+    except Exception as e:
+        print(f"   ⚠️  Could not load GPT2 tokenizer: {e}")
+        print("   Using mock tokenizer for demo...")
+        
+        class MockTokenizer:
+            def __init__(self):
+                self.vocab_size = 50257
+                self.eos_token = '</s>'
+                self.pad_token = '</s>'
+                self.eos_token_id = 50256
+                
+            def encode(self, text, add_special_tokens=True, return_tensors=None):
+                tokens = [hash(word) % self.vocab_size for word in text.split()]
+                if add_special_tokens:
+                    tokens = [0] + tokens + [self.eos_token_id]
+                if return_tensors == 'pt':
+                    import torch
+                    return torch.tensor([tokens])
+                return tokens
+                
+            def decode(self, tokens, skip_special_tokens=True):
+                return " ".join([f"token_{t}" for t in tokens if isinstance(t, int)])
+        
+        tokenizer = MockTokenizer()
     
     # Create small model for demo
     print("🏗️  Creating Atlas model...")
     config = AtlasConfig(
         vocab_size=tokenizer.vocab_size,
-        hidden_size=256,        # Small for demo
+        hidden_size=288,        # Divisible by 4, 6, 8, 9, 12 for flexibility
         num_layers=4,           # Few layers for demo
-        num_heads=4,
+        num_heads=12,
         max_seq_length=512,
         memory_depth=2,
         polynomial_degree=2,

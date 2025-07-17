@@ -8,3 +8,30 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Project specific
+wandb/
+*.log
+outputs/
+checkpoints/
+logs/
+plots/
+.cache/
+data/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints
+
+# PyTorch
+*.pth
+*.pt
