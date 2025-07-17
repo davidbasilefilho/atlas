@@ -84,26 +84,44 @@ def train_model(config):
         
         tokenizer = MockTokenizer()
     
+    # Adjust model size for debug mode with minimal Atlas features
+    if getattr(config, 'debug', False):
+        print("Debug mode: using minimal model configuration")
+        hidden_size = 64
+        num_layers = 1
+        num_heads = 2
+        memory_depth = 1
+        polynomial_degree = 1  # Disable polynomial features in debug
+        context_window_size = 16
+    else:
+        hidden_size = getattr(config.model, 'hidden_size', 768)
+        num_layers = getattr(config.model, 'num_layers', 12)
+        num_heads = getattr(config.model, 'num_heads', 12)
+        memory_depth = getattr(config.model, 'memory_depth', 2)
+        polynomial_degree = getattr(config.model, 'polynomial_degree', 3)
+        context_window_size = getattr(config.model, 'context_window_size', 512)
+
     # Update config with tokenizer vocab size - handle missing attributes gracefully
     atlas_config = AtlasConfig(
         vocab_size=tokenizer.vocab_size,
-        hidden_size=getattr(config.model, 'hidden_size', 768),
-        num_layers=getattr(config.model, 'num_layers', 12),
-        num_heads=getattr(config.model, 'num_heads', 12),
+        hidden_size=hidden_size,
+        num_layers=num_layers,
+        num_heads=num_heads,
         max_seq_length=getattr(config.model, 'max_seq_length', 2048),
         dropout=getattr(config.model, 'dropout', 0.1),
-        memory_depth=getattr(config.model, 'memory_depth', 2),
+        memory_depth=memory_depth,
         memory_hidden_size=getattr(config.model, 'memory_hidden_size', 512),
-        polynomial_degree=getattr(config.model, 'polynomial_degree', 3),
-        context_window_size=getattr(config.model, 'context_window_size', 512),
+        polynomial_degree=polynomial_degree,
+        context_window_size=context_window_size,
         learning_rate_inner=getattr(config.model, 'learning_rate_inner', 0.01),
         momentum_beta=getattr(config.model, 'momentum_beta', 0.9),
-        use_muon_optimizer=getattr(config.model, 'use_muon_optimizer', True),
+        use_muon_optimizer=False if getattr(config, 'debug', False) else getattr(config.model, 'use_muon_optimizer', True),
         batch_size=getattr(config.training, 'batch_size', 8),
         learning_rate=getattr(config.training, 'learning_rate', 1e-4),
         weight_decay=getattr(config.training, 'weight_decay', 0.01),
         warmup_steps=getattr(config.training, 'warmup_steps', 1000),
-        max_steps=getattr(config.training, 'max_steps', 100000)
+        max_steps=getattr(config.training, 'max_steps', 100000),
+        debug=getattr(config, 'debug', False)
     )
     
     # Create model

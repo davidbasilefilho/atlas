@@ -270,7 +270,11 @@ class AtlasEvaluator:
                 plt.title('Atlas Model: Context Length vs Perplexity')
                 plt.grid(True, alpha=0.3)
                 plt.xscale('log')
-                plt.yscale('log')
+                
+                # Only use log scale for y-axis if all values are positive
+                if all(p > 0 for p in perplexities):
+                    plt.yscale('log')
+                
                 plt.savefig(f"{save_dir}/context_scaling.png", dpi=300, bbox_inches='tight')
                 plt.close()
             

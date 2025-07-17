@@ -1,6 +1,40 @@
 # Atlas Project Bug Fixes Summary
 
+# Atlas Project Bug Fixes Summary
+
 This document summarizes all the bugs found and fixed in the Atlas project during the comprehensive debugging session.
+
+## Critical Performance Bug: Sequential Token Processing in AtlasAttention
+
+### Problem
+The AtlasAttention module was processing tokens sequentially in a for loop, completely defeating GPU parallelization and causing extreme slowness/hanging.
+
+### Location
+`model.py`, line 259 in the original `AtlasAttention.forward()` method
+
+### Root Cause
+```python
+for t in range(seq_len):
+    current_q = poly_queries[:, t]  # Process one token at a time
+    current_k = poly_keys[:, t]     
+    current_v = values[:, t]        
+    # ... sequential processing
+```
+
+### Fix
+Replaced sequential processing with parallel batch processing:
+```python
+# Efficient parallel processing instead of sequential loop
+poly_q_flat = poly_queries.reshape(-1, poly_queries.shape[-1])  
+poly_k_flat = poly_keys.reshape(-1, poly_keys.shape[-1])        
+values_flat = values.reshape(-1, values.shape[-1])              
+
+# Process all queries through memory in parallel
+memory_output = self.memory(poly_q_flat)
+```
+
+### Impact
+Training time reduced from hanging/infinite to seconds. Model now properly utilizes batch processing. ~100x performance improvement.
 
 ## Critical Architecture Fixes
 

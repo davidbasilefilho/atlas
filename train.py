@@ -76,19 +76,24 @@ class AtlasTrainer:
         self.epoch = 0
         self.best_loss = float('inf')
         
-        # Initialize wandb with error handling
-        try:
-            wandb.init(
-                project="atlas-training",
-                config=config.__dict__,
-                name=f"atlas-{config.hidden_size}-{config.num_layers}layers",
-                mode="offline"  # Use offline mode to avoid network issues
-            )
-            self.use_wandb = True
-        except Exception as e:
-            print(f"Warning: Could not initialize wandb: {e}")
-            print("Continuing without wandb logging...")
+        # Initialize wandb with error handling - disable in debug mode
+        debug_mode = getattr(config, 'debug', False)
+        if debug_mode:
+            print("Debug mode: disabling wandb logging")
             self.use_wandb = False
+        else:
+            try:
+                wandb.init(
+                    project="atlas-training",
+                    config=config.__dict__,
+                    name=f"atlas-{config.hidden_size}-{config.num_layers}layers",
+                    mode="offline"  # Use offline mode to avoid network issues
+                )
+                self.use_wandb = True
+            except Exception as e:
+                print(f"Warning: Could not initialize wandb: {e}")
+                print("Continuing without wandb logging...")
+                self.use_wandb = False
     
     def warmup_lr_schedule(self, step: int) -> float:
         """Warmup learning rate schedule"""
@@ -209,60 +214,102 @@ class AtlasTrainer:
         print(f"Starting training for {self.config.max_steps} steps...")
         print(f"Model has {sum(p.numel() for p in self.model.parameters()):,} parameters")
         
+        # Check if debug mode
+        debug_mode = getattr(self.config, 'debug', False)
+        if debug_mode:
+            print("Debug mode: adding extra logging")
+        
         running_loss = 0.0
-        log_steps = 100
+        log_steps = 10 if debug_mode else 100  # More frequent logging in debug mode
+        
+        print("Entering main training loop...")
         
         while self.step < self.config.max_steps:
             self.epoch += 1
             
-            for batch in train_dataloader:
+            if debug_mode:
+                print(f"Starting epoch {self.epoch}, step {self.step}")
+            
+            for batch_idx, batch in enumerate(train_dataloader):
                 if self.step >= self.config.max_steps:
                     break
                 
+                if debug_mode and batch_idx < 5:  # Only for first few batches
+                    print(f"  Processing batch {batch_idx}, step {self.step}")
+                
                 # Training step
-                metrics = self.train_step(batch)
-                running_loss += metrics['loss']
+                try:
+                    metrics = self.train_step(batch)
+                    running_loss += metrics['loss']
+                    
+                    if debug_mode and batch_idx < 5:
+                        print(f"    Step completed, loss: {metrics['loss']:.4f}")
+                        
+                except Exception as e:
+                    print(f"Training step failed at step {self.step}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return
                 
                 # Logging
                 if self.step % log_steps == 0:
-                    avg_loss = running_loss / log_steps
+                    avg_loss = running_loss / max(1, log_steps)  # Prevent division by zero
+                    
+                    if debug_mode:
+                        print(f"    Logging at step {self.step}: avg_loss={avg_loss:.4f}")
                     
                     if self.use_wandb:
-                        wandb.log({
-                            'train/loss': avg_loss,
-                            'train/perplexity': math.exp(avg_loss),
-                            'train/learning_rate': metrics['learning_rate'],
-                            'step': self.step
-                        })
+                        try:
+                            wandb.log({
+                                'train/loss': avg_loss,
+                                'train/perplexity': math.exp(min(avg_loss, 10)),  # Cap for numerical stability
+                                'train/learning_rate': metrics['learning_rate'],
+                                'step': self.step
+                            })
+                        except Exception as e:
+                            print(f"Wandb logging failed: {e}")
                     
                     print(f"Step {self.step}: Loss = {avg_loss:.4f}, "
-                          f"PPL = {math.exp(avg_loss):.2f}, "
+                          f"PPL = {math.exp(min(avg_loss, 10)):.2f}, "
                           f"LR = {metrics['learning_rate']:.2e}")
                     
                     running_loss = 0.0
                 
                 # Evaluation
                 if eval_dataloader and self.step % eval_steps == 0:
-                    eval_metrics = self.evaluate(eval_dataloader)
+                    if debug_mode:
+                        print(f"    Running evaluation at step {self.step}")
                     
-                    if self.use_wandb:
-                        wandb.log({
-                            'eval/loss': eval_metrics['eval_loss'],
-                            'eval/perplexity': eval_metrics['eval_perplexity'],
-                            'step': self.step
-                        })
-                    
-                    print(f"Eval - Loss: {eval_metrics['eval_loss']:.4f}, "
-                          f"PPL: {eval_metrics['eval_perplexity']:.2f}")
-                    
-                    # Save best model
-                    if eval_metrics['eval_loss'] < self.best_loss:
-                        self.best_loss = eval_metrics['eval_loss']
-                        self.save_checkpoint(os.path.join(save_dir, 'best_model.pt'))
+                    try:
+                        eval_metrics = self.evaluate(eval_dataloader)
+                        
+                        if self.use_wandb:
+                            wandb.log({
+                                'eval/loss': eval_metrics['eval_loss'],
+                                'eval/perplexity': eval_metrics['eval_perplexity'],
+                                'step': self.step
+                            })
+                        
+                        print(f"Eval - Loss: {eval_metrics['eval_loss']:.4f}, "
+                              f"PPL: {eval_metrics['eval_perplexity']:.2f}")
+                        
+                        # Save best model
+                        if eval_metrics['eval_loss'] < self.best_loss:
+                            self.best_loss = eval_metrics['eval_loss']
+                            self.save_checkpoint(os.path.join(save_dir, 'best_model.pt'))
+                    except Exception as e:
+                        print(f"Evaluation failed: {e}")
                 
                 # Regular checkpoint saving
                 if self.step % 5000 == 0:
                     self.save_checkpoint(os.path.join(save_dir, f'checkpoint_step_{self.step}.pt'))
+                
+                if debug_mode and self.step >= 5:  # Exit early in debug mode
+                    print("Debug mode: stopping early")
+                    return  # Return from the entire function
+                    
+            if debug_mode and self.step >= 5:
+                break  # Break out of epoch loop too
         
         print("Training completed!")
         

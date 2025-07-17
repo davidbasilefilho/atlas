@@ -36,6 +36,9 @@ class AtlasConfig:
     weight_decay: float = 0.01
     warmup_steps: int = 1000
     max_steps: int = 100000
+    
+    # Debug flag
+    debug: bool = False
 
 
 class PolynomialFeatureMap(nn.Module):
@@ -180,7 +183,7 @@ class AtlasMemoryUpdate(nn.Module):
             
         try:
             gradients = torch.autograd.grad(total_loss, memory_params, 
-                                          create_graph=True, retain_graph=True, allow_unused=True)
+                                          create_graph=False, retain_graph=False, allow_unused=True)
         except RuntimeError:
             # If gradient computation fails, return empty dict
             return {}
@@ -192,17 +195,23 @@ class AtlasMemoryUpdate(nn.Module):
                 continue
                 
             if self.config.use_muon_optimizer:
-                # Simplified Muon update with numerical stability
-                # Update momentum
-                self.momentum = self.beta * self.momentum + (1 - self.beta) * grad.norm()
+                # Simplified Muon update with better numerical stability
+                # Update momentum with exponential moving average
+                grad_norm = grad.norm().item()
+                self.momentum = self.beta * self.momentum + (1 - self.beta) * grad_norm
                 
-                # Apply update with gradient clipping for stability
-                grad_clipped = torch.clamp(grad, min=-1.0, max=1.0)
-                update = self.eta * grad_clipped / (self.momentum + self.eps)
+                # Prevent division by zero and apply more conservative clipping
+                grad_clipped = torch.clamp(grad, min=-0.1, max=0.1)  # More conservative clipping
+                momentum_term = self.momentum + self.eps
+                update = self.eta * grad_clipped / momentum_term
+                
+                # Additional safety: limit the update magnitude
+                update = torch.clamp(update, min=-0.01, max=0.01)
             else:
-                # Standard gradient descent with clipping
-                grad_clipped = torch.clamp(grad, min=-1.0, max=1.0)
+                # Standard gradient descent with conservative clipping
+                grad_clipped = torch.clamp(grad, min=-0.1, max=0.1)
                 update = self.eta * grad_clipped
+                update = torch.clamp(update, min=-0.01, max=0.01)
             
             updated_params[id(param)] = param - update
         
@@ -254,57 +263,50 @@ class AtlasAttention(nn.Module):
         poly_queries = self.poly_map(queries)  # [batch, seq_len, heads, poly_dim]
         poly_keys = self.poly_map(keys)        # [batch, seq_len, heads, poly_dim]
         
-        outputs = []
+        # Efficient parallel processing instead of sequential loop
+        # Reshape for batch processing: [batch * seq_len * heads, poly_dim/head_dim]
+        poly_q_flat = poly_queries.reshape(-1, poly_queries.shape[-1])  # [batch*seq*heads, poly_dim]
+        poly_k_flat = poly_keys.reshape(-1, poly_keys.shape[-1])        # [batch*seq*heads, poly_dim]
+        values_flat = values.reshape(-1, values.shape[-1])              # [batch*seq*heads, head_dim]
         
-        for t in range(seq_len):
-            current_q = poly_queries[:, t]  # [batch, heads, poly_dim]
-            current_k = poly_keys[:, t]     # [batch, heads, poly_dim]
-            current_v = values[:, t]        # [batch, heads, head_dim]
+        # Process all queries through memory in parallel
+        try:
+            memory_output = self.memory(poly_q_flat)  # [batch*seq*heads, poly_dim]
             
-            # Update context window (fix buffer management)
+            # Project back to head_dim - handle dimension mismatch efficiently
+            if memory_output.shape[-1] >= self.head_dim:
+                attention_output = memory_output[..., :self.head_dim]  # Take first head_dim features
+            else:
+                # Pad if necessary
+                pad_size = self.head_dim - memory_output.shape[-1]
+                attention_output = F.pad(memory_output, (0, pad_size))
+                
+        except Exception as e:
+            # Fallback: use linear transformation of queries
+            attention_output = torch.zeros(poly_q_flat.shape[0], self.head_dim, 
+                                         device=poly_q_flat.device, dtype=poly_q_flat.dtype)
+            # Use a simple linear projection as fallback
+            if poly_q_flat.shape[-1] >= self.head_dim:
+                attention_output = poly_q_flat[..., :self.head_dim]
+            else:
+                attention_output[..., :poly_q_flat.shape[-1]] = poly_q_flat
+        
+        # Reshape back to original format
+        attention_output = attention_output.reshape(batch_size, seq_len, self.num_heads, self.head_dim)
+        attention_output = attention_output.reshape(batch_size, seq_len, self.hidden_size)
+        
+        # Update context window with the last sequence in the batch (simplified for efficiency)
+        if self.training:
+            # Only update context during training, and only with the last token to avoid overhead
+            last_k = poly_keys[:, -1].mean(0).detach()  # [heads, poly_dim] - average over batch
+            last_v = values[:, -1].mean(0).detach()     # [heads, head_dim] - average over batch
+            
             pos = self.context_pos.item() % self.config.context_window_size
-            # Average over batch dimension for context storage
-            self.context_keys[pos] = current_k.mean(0).detach()  # [heads, poly_dim]
-            self.context_values[pos] = current_v.mean(0).detach()  # [heads, head_dim]
+            self.context_keys[pos] = last_k
+            self.context_values[pos] = last_v
             self.context_pos += 1
-            
-            # Get current context size
-            context_size = min(self.context_pos.item(), self.config.context_window_size)
-            
-            # Compute attention output using memory for each head
-            attention_output = []
-            for h in range(self.num_heads):
-                head_q = current_q[:, h]  # [batch, poly_dim]
-                
-                # Use memory to transform query
-                try:
-                    head_output = self.memory(head_q)  # [batch, poly_dim]
-                    # Project back to head_dim - handle dimension mismatch
-                    if head_output.shape[-1] >= self.head_dim:
-                        head_output = head_output[..., :self.head_dim]  # Take first head_dim features
-                    else:
-                        # Pad if necessary
-                        pad_size = self.head_dim - head_output.shape[-1]
-                        head_output = F.pad(head_output, (0, pad_size))
-                except Exception:
-                    # Fallback: use linear transformation of queries
-                    head_output = torch.zeros(current_q.shape[0], self.head_dim, 
-                                            device=current_q.device, dtype=current_q.dtype)
-                    if head_q.shape[-1] >= self.head_dim:
-                        head_output = head_q[..., :self.head_dim]
-                    else:
-                        head_output[..., :head_q.shape[-1]] = head_q
-                
-                attention_output.append(head_output)
-            
-            attention_output = torch.stack(attention_output, dim=1)  # [batch, heads, head_dim]
-            outputs.append(attention_output)
         
-        # Concatenate outputs
-        outputs = torch.stack(outputs, dim=1)  # [batch, seq_len, heads, head_dim]
-        outputs = outputs.reshape(batch_size, seq_len, self.hidden_size)
-        
-        return self.o_proj(outputs)
+        return self.o_proj(attention_output)
 
 
 class AtlasBlock(nn.Module):
