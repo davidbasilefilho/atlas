@@ -76,12 +76,19 @@ class AtlasTrainer:
         self.epoch = 0
         self.best_loss = float('inf')
         
-        # Initialize wandb
-        wandb.init(
-            project="atlas-training",
-            config=config.__dict__,
-            name=f"atlas-{config.hidden_size}-{config.num_layers}layers"
-        )
+        # Initialize wandb with error handling
+        try:
+            wandb.init(
+                project="atlas-training",
+                config=config.__dict__,
+                name=f"atlas-{config.hidden_size}-{config.num_layers}layers",
+                mode="offline"  # Use offline mode to avoid network issues
+            )
+            self.use_wandb = True
+        except Exception as e:
+            print(f"Warning: Could not initialize wandb: {e}")
+            print("Continuing without wandb logging...")
+            self.use_wandb = False
     
     def warmup_lr_schedule(self, step: int) -> float:
         """Warmup learning rate schedule"""
@@ -220,12 +227,13 @@ class AtlasTrainer:
                 if self.step % log_steps == 0:
                     avg_loss = running_loss / log_steps
                     
-                    wandb.log({
-                        'train/loss': avg_loss,
-                        'train/perplexity': math.exp(avg_loss),
-                        'train/learning_rate': metrics['learning_rate'],
-                        'step': self.step
-                    })
+                    if self.use_wandb:
+                        wandb.log({
+                            'train/loss': avg_loss,
+                            'train/perplexity': math.exp(avg_loss),
+                            'train/learning_rate': metrics['learning_rate'],
+                            'step': self.step
+                        })
                     
                     print(f"Step {self.step}: Loss = {avg_loss:.4f}, "
                           f"PPL = {math.exp(avg_loss):.2f}, "
@@ -237,11 +245,12 @@ class AtlasTrainer:
                 if eval_dataloader and self.step % eval_steps == 0:
                     eval_metrics = self.evaluate(eval_dataloader)
                     
-                    wandb.log({
-                        'eval/loss': eval_metrics['eval_loss'],
-                        'eval/perplexity': eval_metrics['eval_perplexity'],
-                        'step': self.step
-                    })
+                    if self.use_wandb:
+                        wandb.log({
+                            'eval/loss': eval_metrics['eval_loss'],
+                            'eval/perplexity': eval_metrics['eval_perplexity'],
+                            'step': self.step
+                        })
                     
                     print(f"Eval - Loss: {eval_metrics['eval_loss']:.4f}, "
                           f"PPL: {eval_metrics['eval_perplexity']:.2f}")

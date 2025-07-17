@@ -249,41 +249,51 @@ class AtlasEvaluator:
         """
         Create visualizations of evaluation results
         """
-        import os
-        os.makedirs(save_dir, exist_ok=True)
-        
-        # Plot context length scaling
-        if 'context_scaling' in results:
-            plt.figure(figsize=(10, 6))
-            lengths = list(results['context_scaling'].keys())
-            perplexities = list(results['context_scaling'].values())
+        try:
+            import os
+            import matplotlib
+            matplotlib.use('Agg')  # Use non-interactive backend
+            import matplotlib.pyplot as plt
+            import seaborn as sns
             
-            plt.plot(lengths, perplexities, 'bo-', linewidth=2, markersize=8)
-            plt.xlabel('Context Length')
-            plt.ylabel('Perplexity')
-            plt.title('Atlas Model: Context Length vs Perplexity')
-            plt.grid(True, alpha=0.3)
-            plt.xscale('log')
-            plt.yscale('log')
-            plt.savefig(f"{save_dir}/context_scaling.png", dpi=300, bbox_inches='tight')
-            plt.close()
-        
-        # Plot needle-in-haystack results
-        if 'needle_haystack' in results:
-            plt.figure(figsize=(10, 6))
-            positions = [float(k.split('_')[1]) for k in results['needle_haystack'].keys()]
-            scores = list(results['needle_haystack'].values())
+            os.makedirs(save_dir, exist_ok=True)
             
-            plt.plot(positions, scores, 'ro-', linewidth=2, markersize=8)
-            plt.xlabel('Needle Position (Relative)')
-            plt.ylabel('Retrieval Confidence')
-            plt.title('Atlas Model: Needle-in-Haystack Performance')
-            plt.grid(True, alpha=0.3)
-            plt.ylim(0, 1)
-            plt.savefig(f"{save_dir}/needle_haystack.png", dpi=300, bbox_inches='tight')
-            plt.close()
-        
-        print(f"Plots saved to {save_dir}/")
+            # Plot context length scaling
+            if 'context_scaling' in results:
+                plt.figure(figsize=(10, 6))
+                lengths = list(results['context_scaling'].keys())
+                perplexities = list(results['context_scaling'].values())
+                
+                plt.plot(lengths, perplexities, 'bo-', linewidth=2, markersize=8)
+                plt.xlabel('Context Length')
+                plt.ylabel('Perplexity')
+                plt.title('Atlas Model: Context Length vs Perplexity')
+                plt.grid(True, alpha=0.3)
+                plt.xscale('log')
+                plt.yscale('log')
+                plt.savefig(f"{save_dir}/context_scaling.png", dpi=300, bbox_inches='tight')
+                plt.close()
+            
+            # Plot needle-in-haystack results
+            if 'needle_haystack' in results:
+                plt.figure(figsize=(10, 6))
+                positions = [float(k.split('_')[1]) for k in results['needle_haystack'].keys()]
+                scores = list(results['needle_haystack'].values())
+                
+                plt.plot(positions, scores, 'ro-', linewidth=2, markersize=8)
+                plt.xlabel('Needle Position (Relative)')
+                plt.ylabel('Retrieval Confidence')
+                plt.title('Atlas Model: Needle-in-Haystack Performance')
+                plt.grid(True, alpha=0.3)
+                plt.ylim(0, 1)
+                plt.savefig(f"{save_dir}/needle_haystack.png", dpi=300, bbox_inches='tight')
+                plt.close()
+            
+            print(f"Plots saved to {save_dir}/")
+            
+        except Exception as e:
+            print(f"Warning: Could not create plots: {e}")
+            print("Continuing without plots...")
 
 
 def main():

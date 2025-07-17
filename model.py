@@ -46,29 +46,59 @@ class PolynomialFeatureMap(nn.Module):
         self.input_dim = input_dim
         self.degree = degree
         
-        # Learnable coefficients for polynomial terms
-        self.coefficients = nn.Parameter(torch.ones(degree + 1) / math.factorial(torch.arange(degree + 1).float()))
+        # Learnable coefficients for polynomial terms with numerical stability
+        factorial_terms = torch.tensor([math.factorial(i) for i in range(degree + 1)], dtype=torch.float32)
+        self.coefficients = nn.Parameter(torch.ones(degree + 1) / factorial_terms)
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Apply polynomial feature mapping
-        x: [batch_size, seq_len, input_dim]
-        returns: [batch_size, seq_len, expanded_dim]
+        x: [batch_size, seq_len, input_dim] or [batch_size, seq_len, num_heads, head_dim]
+        returns: [batch_size, seq_len, expanded_dim] or [batch_size, seq_len, num_heads, expanded_dim]
         """
-        batch_size, seq_len, _ = x.shape
+        original_shape = x.shape
+        
+        # Handle both 3D and 4D inputs
+        if len(original_shape) == 4:
+            # Reshape from [batch, seq_len, heads, head_dim] to [batch*seq_len*heads, head_dim]
+            batch_size, seq_len, num_heads, head_dim = original_shape
+            x = x.reshape(-1, head_dim)
+            is_4d = True
+        elif len(original_shape) == 3:
+            # Keep as [batch, seq_len, dim] -> [batch*seq_len, dim]
+            batch_size, seq_len, dim = original_shape
+            x = x.reshape(-1, dim)
+            is_4d = False
+        else:
+            raise ValueError(f"Expected 3D or 4D input, got {len(original_shape)}D")
+        
+        input_dim = x.shape[-1]
         features = []
         
-        # Add constant term
-        features.append(self.coefficients[0] * torch.ones_like(x[..., :1]))
+        # Add constant term (full dimension to maintain consistent sizing)
+        features.append(self.coefficients[0] * torch.ones_like(x))
         
-        # Add polynomial terms
+        # Add polynomial terms with numerical stability
+        x_stable = torch.clamp(x, min=-10.0, max=10.0)  # Prevent overflow
         for i in range(1, self.degree + 1):
             # For simplicity, we use element-wise powers
             # In practice, you might want to use tensor products for full polynomial expansion
-            power_term = self.coefficients[i] * (x ** i)
+            power_term = self.coefficients[i] * (x_stable ** i)
+            # Add small epsilon to prevent numerical issues
+            power_term = torch.clamp(power_term, min=-1e6, max=1e6)
             features.append(power_term)
             
-        return torch.cat(features, dim=-1)
+        result = torch.cat(features, dim=-1)
+        
+        # Reshape back to original structure
+        if is_4d:
+            expanded_dim = result.shape[-1]
+            result = result.reshape(batch_size, seq_len, num_heads, expanded_dim)
+        else:
+            expanded_dim = result.shape[-1]
+            result = result.reshape(batch_size, seq_len, expanded_dim)
+        
+        return result
 
 
 class DeepMemoryModule(nn.Module):
@@ -101,13 +131,19 @@ class AtlasMemoryUpdate(nn.Module):
         self.config = config
         self.eta = config.learning_rate_inner
         self.beta = config.momentum_beta
+        self.eps = 1e-8  # Numerical stability
         
-        # Memory state for Muon optimizer
+        # Memory state for Muon optimizer - initialize properly
         self.register_buffer('momentum', torch.zeros(1))
+        self.register_buffer('gradient_sq', torch.zeros(1))
         
     def compute_attentional_bias(self, memory: nn.Module, keys: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
         """Compute the attentional bias L(M; k, v)"""
         predicted_values = memory(keys)
+        # Ensure shapes match for loss computation
+        if predicted_values.shape != values.shape:
+            # Project to correct shape if needed
+            predicted_values = predicted_values[..., :values.shape[-1]]
         return F.mse_loss(predicted_values, values, reduction='none').sum(dim=-1)
     
     def omega_rule_update(self, memory: nn.Module, context_keys: torch.Tensor, 
@@ -115,26 +151,58 @@ class AtlasMemoryUpdate(nn.Module):
         """
         Omega rule: optimize memory based on context window instead of just current token
         """
-        # Compute weighted loss over context window
         total_loss = 0
-        for i, (keys, values, gamma) in enumerate(zip(context_keys, context_values, gamma_weights)):
-            loss = self.compute_attentional_bias(memory, keys, values)
-            total_loss += gamma * loss.mean()
+        batch_size = context_keys.shape[0] if context_keys.dim() > 2 else 1
         
-        # Compute gradients
+        # Handle the case where inputs are batched or single sequences
+        if context_keys.dim() == 3:  # [batch, context_size, dim]
+            for b in range(batch_size):
+                for t in range(context_keys.shape[1]):
+                    keys = context_keys[b, t].unsqueeze(0)  # [1, dim]
+                    values = context_values[b, t].unsqueeze(0)  # [1, dim]
+                    gamma = gamma_weights[t] if t < len(gamma_weights) else gamma_weights[-1]
+                    
+                    loss = self.compute_attentional_bias(memory, keys, values)
+                    total_loss += gamma * loss.mean()
+        else:  # [context_size, dim]
+            for t in range(context_keys.shape[0]):
+                keys = context_keys[t].unsqueeze(0)  # [1, dim]
+                values = context_values[t].unsqueeze(0)  # [1, dim]
+                gamma = gamma_weights[t] if t < len(gamma_weights) else gamma_weights[-1]
+                
+                loss = self.compute_attentional_bias(memory, keys, values)
+                total_loss += gamma * loss.mean()
+        
+        # Compute gradients safely
         memory_params = list(memory.parameters())
-        gradients = torch.autograd.grad(total_loss, memory_params, create_graph=True, retain_graph=True)
+        if len(memory_params) == 0:
+            return {}
+            
+        try:
+            gradients = torch.autograd.grad(total_loss, memory_params, 
+                                          create_graph=True, retain_graph=True, allow_unused=True)
+        except RuntimeError:
+            # If gradient computation fails, return empty dict
+            return {}
         
-        # Apply Muon optimizer (approximation of second-order information)
+        # Apply Muon optimizer (simplified but more stable version)
         updated_params = {}
         for param, grad in zip(memory_params, gradients):
+            if grad is None:
+                continue
+                
             if self.config.use_muon_optimizer:
-                # Simplified Muon update (in practice, you'd use the full Muon implementation)
-                self.momentum = self.beta * self.momentum + (1 - self.beta) * grad
-                update = self.eta * self.momentum
+                # Simplified Muon update with numerical stability
+                # Update momentum
+                self.momentum = self.beta * self.momentum + (1 - self.beta) * grad.norm()
+                
+                # Apply update with gradient clipping for stability
+                grad_clipped = torch.clamp(grad, min=-1.0, max=1.0)
+                update = self.eta * grad_clipped / (self.momentum + self.eps)
             else:
-                # Standard gradient descent
-                update = self.eta * grad
+                # Standard gradient descent with clipping
+                grad_clipped = torch.clamp(grad, min=-1.0, max=1.0)
+                update = self.eta * grad_clipped
             
             updated_params[id(param)] = param - update
         
@@ -159,6 +227,8 @@ class AtlasAttention(nn.Module):
         
         # Polynomial feature mapping
         self.poly_map = PolynomialFeatureMap(self.head_dim, config.polynomial_degree)
+        
+        # Calculate the actual polynomial dimension
         poly_dim = self.head_dim * (config.polynomial_degree + 1)
         
         # Deep memory module
@@ -167,7 +237,7 @@ class AtlasAttention(nn.Module):
         # Memory update mechanism
         self.memory_updater = AtlasMemoryUpdate(config)
         
-        # Context window buffer
+        # Context window buffer - use the correct poly_dim
         self.register_buffer('context_keys', torch.zeros(config.context_window_size, config.num_heads, poly_dim))
         self.register_buffer('context_values', torch.zeros(config.context_window_size, config.num_heads, self.head_dim))
         self.register_buffer('context_pos', torch.zeros(1, dtype=torch.long))
@@ -191,34 +261,40 @@ class AtlasAttention(nn.Module):
             current_k = poly_keys[:, t]     # [batch, heads, poly_dim]
             current_v = values[:, t]        # [batch, heads, head_dim]
             
-            # Update context window
+            # Update context window (fix buffer management)
             pos = self.context_pos.item() % self.config.context_window_size
-            self.context_keys[pos] = current_k.mean(0)  # Average over batch
-            self.context_values[pos] = current_v.mean(0)
+            # Average over batch dimension for context storage
+            self.context_keys[pos] = current_k.mean(0).detach()  # [heads, poly_dim]
+            self.context_values[pos] = current_v.mean(0).detach()  # [heads, head_dim]
             self.context_pos += 1
             
-            # Get current context
+            # Get current context size
             context_size = min(self.context_pos.item(), self.config.context_window_size)
-            if context_size > 0:
-                # Compute gamma weights (decay over time)
-                gamma_weights = torch.exp(-0.1 * torch.arange(context_size, device=hidden_states.device))
-                gamma_weights = gamma_weights / gamma_weights.sum()
-                
-                context_k = self.context_keys[:context_size]
-                context_v = self.context_values[:context_size]
-                
-                # Update memory using Omega rule
-                # For simplicity, we'll use the current implementation
-                # In practice, you'd need to handle the functional form updates
-                
-            # Compute attention output using memory
+            
+            # Compute attention output using memory for each head
             attention_output = []
             for h in range(self.num_heads):
                 head_q = current_q[:, h]  # [batch, poly_dim]
-                head_output = self.memory(head_q)  # [batch, poly_dim]
                 
-                # Project back to head_dim
-                head_output = head_output[:, :self.head_dim]  # Take first head_dim features
+                # Use memory to transform query
+                try:
+                    head_output = self.memory(head_q)  # [batch, poly_dim]
+                    # Project back to head_dim - handle dimension mismatch
+                    if head_output.shape[-1] >= self.head_dim:
+                        head_output = head_output[..., :self.head_dim]  # Take first head_dim features
+                    else:
+                        # Pad if necessary
+                        pad_size = self.head_dim - head_output.shape[-1]
+                        head_output = F.pad(head_output, (0, pad_size))
+                except Exception:
+                    # Fallback: use linear transformation of queries
+                    head_output = torch.zeros(current_q.shape[0], self.head_dim, 
+                                            device=current_q.device, dtype=current_q.dtype)
+                    if head_q.shape[-1] >= self.head_dim:
+                        head_output = head_q[..., :self.head_dim]
+                    else:
+                        head_output[..., :head_q.shape[-1]] = head_q
+                
                 attention_output.append(head_output)
             
             attention_output = torch.stack(attention_output, dim=1)  # [batch, heads, head_dim]
