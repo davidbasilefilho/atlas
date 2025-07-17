@@ -8,7 +8,10 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 from transformers import GPT2Tokenizer
-import wandb
+try:
+    import wandb
+except ImportError:
+    wandb = None
 import numpy as np
 from tqdm import tqdm
 import os
@@ -83,13 +86,16 @@ class AtlasTrainer:
             self.use_wandb = False
         else:
             try:
-                wandb.init(
-                    project="atlas-training",
-                    config=config.__dict__,
-                    name=f"atlas-{config.hidden_size}-{config.num_layers}layers",
-                    mode="offline"  # Use offline mode to avoid network issues
-                )
-                self.use_wandb = True
+                if wandb is not None:
+                    wandb.init(
+                        project="atlas-training",
+                        config=config.__dict__,
+                        name=f"atlas-{config.hidden_size}-{config.num_layers}layers",
+                        mode="offline"  # Use offline mode to avoid network issues
+                    )
+                    self.use_wandb = True
+                else:
+                    self.use_wandb = False
             except Exception as e:
                 print(f"Warning: Could not initialize wandb: {e}")
                 print("Continuing without wandb logging...")
@@ -258,7 +264,7 @@ class AtlasTrainer:
                     if debug_mode:
                         print(f"    Logging at step {self.step}: avg_loss={avg_loss:.4f}")
                     
-                    if self.use_wandb:
+                    if self.use_wandb and wandb is not None:
                         try:
                             wandb.log({
                                 'train/loss': avg_loss,
@@ -283,7 +289,7 @@ class AtlasTrainer:
                     try:
                         eval_metrics = self.evaluate(eval_dataloader)
                         
-                        if self.use_wandb:
+                        if self.use_wandb and wandb is not None:
                             wandb.log({
                                 'eval/loss': eval_metrics['eval_loss'],
                                 'eval/perplexity': eval_metrics['eval_perplexity'],

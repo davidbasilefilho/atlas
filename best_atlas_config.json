@@ -1,0 +1,12 @@
+{
+  "hidden_size": 256,
+  "num_layers": 4,
+  "num_heads": 12,
+  "memory_depth": 2,
+  "memory_hidden_size": 512,
+  "polynomial_degree": 2,
+  "context_window_size": 128,
+  "learning_rate_inner": 0.01,
+  "momentum_beta": 0.9,
+  "use_muon_optimizer": true
+}

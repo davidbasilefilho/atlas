@@ -213,6 +213,126 @@ config.context_window_size = 1
 
 ## 🔧 Advanced Usage
 
+### MCTS Optimization with Absolute-Zero-Reasoner
+
+Atlas now includes a Monte Carlo Tree Search (MCTS) optimization system based on the Absolute-Zero-Reasoner approach for automatically discovering optimal model configurations.
+
+#### Running MCTS Optimization
+
+```bash
+python optimize.py
+```
+
+This will:
+- Start with a base Atlas configuration
+- Use MCTS to explore configuration space
+- Generate reasoning for each configuration change
+- Evaluate configurations through training/testing
+- Save the best configuration and training data
+
+#### How It Works
+
+The optimization system adapts the Absolute-Zero-Reasoner paper's MCTS approach:
+
+1. **State**: Each node represents an `AtlasConfig` with specific parameter values
+2. **Actions**: Configuration mutations (e.g., `{"polynomial_degree": 4}`)
+3. **Simulation**: Fast training/evaluation runs using subprocess calls
+4. **Reasoning**: Structured explanations for parameter changes using `<R>...</R>` tags
+5. **Reward**: Weighted combination of perplexity, needle accuracy, and memory capacity
+
+#### MCTS Components
+
+**Selection**: Uses PUCT (Polynomial Upper Confidence Trees) formula:
+```
+PUCT(s,a) = Q(s,a) + P(s,a) * c_puct * sqrt(N(s)) / (1 + N(s,a))
+```
+
+**Expansion**: Reasoner generates candidate configurations with Atlas-specific reasoning:
+```
+<R>The current context_window_size is small, limiting the Omega Rule's ability to 
+perform long-range memory updates. I will test increasing it to 1024 to improve 
+performance on the needle-in-haystack task.</R>
+```
+
+**Simulation**: Empirical evaluation through subprocess execution:
+```bash
+python main.py --mode eval --config-json config.json --output-json --debug
+```
+
+**Backpropagation**: Updates Q-values and visit counts along the path to root.
+
+#### Configuration Space
+
+The optimizer explores these Atlas-specific parameters:
+
+- `memory_depth`: Depth of DeepMemoryModule (1-4 layers)
+- `polynomial_degree`: PolynomialFeatureMap degree (1-5)
+- `context_window_size`: Omega Rule window size (128-1024)
+- `hidden_size`: Model hidden dimensions (256-1024)
+- `num_layers`: Transformer layers (4-24)
+- `learning_rate_inner`: Inner optimization rate for Muon
+- `use_muon_optimizer`: Enable/disable second-order optimization
+
+#### Output Files
+
+After optimization:
+
+- `best_atlas_config.json`: Optimal configuration found
+- `reasoner_training_data.jsonl`: Training data for reasoner improvement
+
+#### Custom Optimization
+
+```python
+from optimize import AtlasOptimizer, AtlasConfigOptimizer
+
+# Custom initial configuration
+initial_config = AtlasConfigOptimizer(
+    hidden_size=512,
+    memory_depth=2,
+    polynomial_degree=3,
+    context_window_size=256
+)
+
+# Run optimization
+optimizer = AtlasOptimizer(initial_config, max_simulations=100)
+best_config, best_reward, training_data = optimizer.optimize()
+```
+
+#### Programmatic Configuration Testing
+
+Test specific configurations:
+
+```bash
+# Create config file
+echo '{"memory_depth": 3, "polynomial_degree": 4}' > test_config.json
+
+# Test configuration
+python main.py --mode eval --config-json test_config.json --output-json --debug
+```
+
+Returns structured metrics:
+```json
+{
+  "perplexity": 45.2,
+  "memory_capacity_score": -2.1,
+  "needle_accuracy": 0.73
+}
+```
+
+#### Reward Function
+
+The optimization uses a weighted reward combining:
+
+```python
+def calculate_reward(metrics):
+    ppl_score = max(0, 1 - (perplexity / 100.0))      # 40% weight
+    needle_acc = needle_accuracy                        # 40% weight  
+    mem_score = (memory_capacity_score + 10) / 10.0   # 20% weight
+    return 0.4 * ppl_score + 0.4 * needle_acc + 0.2 * mem_score
+```
+
+This balances language modeling performance, retrieval capability, and memory efficiency.
+
 ### Custom Memory Architectures
 
 ```python
