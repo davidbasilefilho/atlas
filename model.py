@@ -53,14 +53,30 @@ class PolynomialFeatureMap(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Apply polynomial feature mapping
-        x: [batch_size, seq_len, input_dim]
-        returns: [batch_size, seq_len, expanded_dim]
+        x: [batch_size, seq_len, input_dim] or [batch_size, seq_len, num_heads, head_dim]
+        returns: [batch_size, seq_len, expanded_dim] or [batch_size, seq_len, num_heads, expanded_dim]
         """
-        batch_size, seq_len, _ = x.shape
+        original_shape = x.shape
+        
+        # Handle both 3D and 4D inputs
+        if len(original_shape) == 4:
+            # Reshape from [batch, seq_len, heads, head_dim] to [batch*seq_len*heads, head_dim]
+            batch_size, seq_len, num_heads, head_dim = original_shape
+            x = x.reshape(-1, head_dim)
+            is_4d = True
+        elif len(original_shape) == 3:
+            # Keep as [batch, seq_len, dim] -> [batch*seq_len, dim]
+            batch_size, seq_len, dim = original_shape
+            x = x.reshape(-1, dim)
+            is_4d = False
+        else:
+            raise ValueError(f"Expected 3D or 4D input, got {len(original_shape)}D")
+        
+        input_dim = x.shape[-1]
         features = []
         
-        # Add constant term
-        features.append(self.coefficients[0] * torch.ones_like(x[..., :1]))
+        # Add constant term (full dimension to maintain consistent sizing)
+        features.append(self.coefficients[0] * torch.ones_like(x))
         
         # Add polynomial terms with numerical stability
         x_stable = torch.clamp(x, min=-10.0, max=10.0)  # Prevent overflow
@@ -72,7 +88,17 @@ class PolynomialFeatureMap(nn.Module):
             power_term = torch.clamp(power_term, min=-1e6, max=1e6)
             features.append(power_term)
             
-        return torch.cat(features, dim=-1)
+        result = torch.cat(features, dim=-1)
+        
+        # Reshape back to original structure
+        if is_4d:
+            expanded_dim = result.shape[-1]
+            result = result.reshape(batch_size, seq_len, num_heads, expanded_dim)
+        else:
+            expanded_dim = result.shape[-1]
+            result = result.reshape(batch_size, seq_len, expanded_dim)
+        
+        return result
 
 
 class DeepMemoryModule(nn.Module):
@@ -201,6 +227,8 @@ class AtlasAttention(nn.Module):
         
         # Polynomial feature mapping
         self.poly_map = PolynomialFeatureMap(self.head_dim, config.polynomial_degree)
+        
+        # Calculate the actual polynomial dimension
         poly_dim = self.head_dim * (config.polynomial_degree + 1)
         
         # Deep memory module
@@ -209,7 +237,7 @@ class AtlasAttention(nn.Module):
         # Memory update mechanism
         self.memory_updater = AtlasMemoryUpdate(config)
         
-        # Context window buffer
+        # Context window buffer - use the correct poly_dim
         self.register_buffer('context_keys', torch.zeros(config.context_window_size, config.num_heads, poly_dim))
         self.register_buffer('context_values', torch.zeros(config.context_window_size, config.num_heads, self.head_dim))
         self.register_buffer('context_pos', torch.zeros(1, dtype=torch.long))
